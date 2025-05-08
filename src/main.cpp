@@ -1,6 +1,10 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <WiFiManager.h> // Include WiFiManager library
+#include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
+#include <FS.h>
+#include <SPIFFS.h>
 
 #define ONE_WIRE_BUS 4    // GPIO pin connected to the DS18B20 data pin
 #define RESET_BUTTON_PIN 35 // GPIO pin connected to the reset button (D35)
@@ -8,6 +12,31 @@
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws"); // WebSocket endpoint
+
+void notifyClients(float temperature) {
+  String message = String(temperature);
+  ws.textAll(message); // Send temperature to all connected clients
+}
+
+void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo *)arg;
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    data[len] = 0;
+    Serial.printf("WebSocket message received: %s\n", (char *)data);
+  }
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+  } else if (type == WS_EVT_DISCONNECT) {
+    Serial.printf("WebSocket client #%u disconnected\n", client->id());
+  } else if (type == WS_EVT_DATA) {
+    handleWebSocketMessage(arg, data, len);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -18,6 +47,12 @@ void setup() {
   // Configure the LED pin
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW); // Ensure the LED is off initially
+
+  // Initialize SPIFFS
+  if (!SPIFFS.begin()) {
+    Serial.println("An error occurred while mounting SPIFFS");
+    return;
+  }
 
   // WiFiManager setup
   WiFiManager wifiManager;
@@ -46,12 +81,23 @@ void setup() {
   } else {
     Serial.println("DS18B20 Temperature Sensor Initialized");
   }
+
+  // WebSocket setup
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
+
+  // Serve static files from SPIFFS
+  server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
+
+  // Start server
+  server.begin();
 }
 
 void loop() {
   static bool buttonPressed = false; // Flag to track button state
   static unsigned long buttonPressStart = 0; // Track when the button was first pressed
   static unsigned long lastPrintedTime = 0; // Track the last time a message was printed
+  static unsigned long lastTemperatureUpdate = 0; // Track the last time temperature was sent
 
   // Check if the reset button is pressed
   if (digitalRead(RESET_BUTTON_PIN) == LOW) { // Button is pressed
@@ -104,6 +150,12 @@ void loop() {
     Serial.print("Temperature: ");
     Serial.print(temperatureC);
     Serial.println(" °C");
+
+    // Send temperature updates to WebSocket clients every 2 seconds
+    if (millis() - lastTemperatureUpdate > 2000) {
+      notifyClients(temperatureC);
+      lastTemperatureUpdate = millis();
+    }
   }
 
   // Delay for 2 seconds before the next reading
