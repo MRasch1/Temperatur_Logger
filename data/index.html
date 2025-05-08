@@ -15,9 +15,45 @@
     Current Temperature: <span id="temperature">--</span> °C
   </div>
   <canvas id="chart"></canvas>
+  <div class="service-mode" id="service-mode" style="display: none;">
+    <h2>Service Mode</h2>
+    <button onclick="clearWiFiConfig()">Clear Wi-Fi Configuration</button>
+    <button onclick="clearTemperatureData()">Clear Temperature Data</button>
+  </div>
   <footer>
     <p>Powered by ESP32</p>
   </footer>
   <script src="script.js"></script>
+  <script>
+    // Check if the ESP32 is in service mode
+    fetch('/is_service_mode')
+      .then(response => response.json())
+      .then(data => {
+        if (data.serviceMode) {
+          document.getElementById('service-mode').style.display = 'block'; // Show buttons
+        } else {
+          document.getElementById('service-mode').style.display = 'none'; // Hide buttons
+        }
+      })
+      .catch(error => console.error('Error:', error));
+
+    function clearWiFiConfig() {
+      if (confirm("Are you sure you want to clear Wi-Fi configuration?")) {
+        fetch('/clear_wifi')
+          .then(response => response.text())
+          .then(data => alert(data))
+          .catch(error => console.error('Error:', error));
+      }
+    }
+
+    function clearTemperatureData() {
+      if (confirm("Are you sure you want to clear temperature data?")) {
+        fetch('/clear_data')
+          .then(response => response.text())
+          .then(data => alert(data))
+          .catch(error => console.error('Error:', error));
+      }
+    }
+  </script>
 </body>
 </html>
