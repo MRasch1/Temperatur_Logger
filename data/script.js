@@ -71,3 +71,22 @@ function updateChart(temperature) {
 
   chart.update(); // Refresh the chart
 }
+
+function activateServiceMode() {
+  fetch('/activate_service_mode')
+    .then(response => response.text())
+    .then(data => alert(data)) // Show the server's response in an alert
+    .catch(error => console.error('Error:', error)); // Log any errors
+}
+
+// Check if the ESP32 is in service mode
+fetch('/is_service_mode')
+  .then(response => response.json())
+  .then(data => {
+    if (data.serviceMode) {
+      document.getElementById('service-mode').style.display = 'block'; // Show buttons
+    } else {
+      document.getElementById('service-mode').style.display = 'none'; // Hide buttons
+    }
+  })
+  .catch(error => console.error('Error:', error));

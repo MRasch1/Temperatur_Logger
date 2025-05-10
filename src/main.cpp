@@ -5,6 +5,7 @@
 #include <AsyncTCP.h>
 #include <FS.h>
 #include <SPIFFS.h>
+#include "memory_logger.h"
 
 #define ONE_WIRE_BUS 4    // GPIO pin connected to the DS18B20 data pin
 #define RESET_BUTTON_PIN 35 // GPIO pin connected to the reset button (D35)
@@ -50,7 +51,24 @@ void logTemperatureToSPIFFS(float temperature) {
   String logEntry = String(millis() / 1000) + "s: " + String(temperature) + " °C\n";
   file.print(logEntry);
   file.close();
-  Serial.println("Logged: " + logEntry);
+
+  // Remove or comment out this line to stop printing "Logged" messages
+  // Serial.println("Logged: " + logEntry);
+}
+
+// Function to generate a CSV file from log data
+bool generateCSV(const char *filePath, const char *header, const String &data) {
+  File csvFile = SPIFFS.open(filePath, FILE_WRITE);
+  if (!csvFile) {
+    Serial.println("Failed to open CSV file for writing.");
+    return false;
+  }
+
+  csvFile.println(header); // Write the header
+  csvFile.print(data);     // Write the log data
+  csvFile.close();
+  Serial.println("CSV file generated successfully.");
+  return true;
 }
 
 void setup() {
@@ -115,7 +133,7 @@ void setup() {
     ESP.restart();
   });
 
-// Endpoint to clear temperature data
+  // Endpoint to clear temperature data
   server.on("/clear_data", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (SPIFFS.exists("/temperature_log.txt")) {
       SPIFFS.remove("/temperature_log.txt");
@@ -126,10 +144,53 @@ void setup() {
     }
   });
 
-// Endpoint to check service mode status
+  // Endpoint to check service mode status
   server.on("/is_service_mode", HTTP_GET, [](AsyncWebServerRequest *request) {
     String jsonResponse = "{\"serviceMode\": " + String(serviceMode ? "true" : "false") + "}";
     request->send(200, "application/json", jsonResponse);
+  });
+
+  // Endpoint to download temperature logs as CSV
+  server.on("/download_logs", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (SPIFFS.exists("/temperature_log.csv")) {
+      request->send(SPIFFS, "/temperature_log.csv", "text/csv");
+    } else {
+      request->send(404, "text/plain", "No logs available.");
+    }
+  });
+
+  // Endpoint to generate CSV from logs
+  server.on("/generate_csv", HTTP_GET, [](AsyncWebServerRequest *request) {
+    File logFile = SPIFFS.open("/temperature_log.txt", FILE_READ);
+    if (!logFile) {
+      request->send(500, "text/plain", "Failed to open log file.");
+      return;
+    }
+
+    String logs = "";
+    while (logFile.available()) {
+      logs += logFile.readStringUntil('\n');
+    }
+    logFile.close();
+
+    if (generateCSV("/temperature_log.csv", "Timestamp,Temperature", logs)) {
+      request->send(200, "text/plain", "CSV generated successfully.");
+    } else {
+      request->send(500, "text/plain", "Failed to generate CSV.");
+    }
+  });
+
+  // Endpoint to activate service mode
+  server.on("/activate_service_mode", HTTP_GET, [](AsyncWebServerRequest *request) {
+    serviceMode = true; // Activate service mode
+    request->send(200, "text/plain", "Service mode activated."); // Respond to the client
+  });
+
+  // Endpoint to toggle service mode
+  server.on("/toggle_service_mode", HTTP_GET, [](AsyncWebServerRequest *request) {
+    serviceMode = !serviceMode; // Toggle service mode
+    String response = serviceMode ? "Service mode activated." : "Service mode deactivated.";
+    request->send(200, "text/plain", response);
   });
 
   // Start server
@@ -139,27 +200,27 @@ void setup() {
 void loop() {
   static bool buttonPressed = false; // Flag to track button state
   static unsigned long buttonPressStart = 0; // Track when the button was first pressed
-  static unsigned long lastPrintedTime = 0; // Track the last time a message was printed
-  static bool serviceModeActivated = false; // Flag to ensure service mode is activated only once
-  static bool serviceModeDeactivated = false; // Flag to ensure service mode is not reactivated after deactivation
+  static unsigned long elapsedTime = 0; // Track how long the button has been held
+  static unsigned long lastPrintedSecond = 0; // Track the last second that was printed
 
   // Check if the reset button is pressed
   if (digitalRead(RESET_BUTTON_PIN) == LOW) { // Button is pressed
     if (!buttonPressed) { // Button was just pressed
       buttonPressed = true;
       buttonPressStart = millis(); // Start timing
-      lastPrintedTime = 0; // Reset the last printed time
+      lastPrintedSecond = 0; // Reset the last printed second
       Serial.println("Button pressed. Starting timer...");
     }
 
     // Calculate how long the button has been held
-    unsigned long elapsedTime = millis() - buttonPressStart;
+    elapsedTime = millis() - buttonPressStart;
 
-    // Print the elapsed time only once per second
-    if (elapsedTime / 1000 > lastPrintedTime) {
-      lastPrintedTime = elapsedTime / 1000;
+    // Print a message for every second the button is held
+    unsigned long currentSecond = elapsedTime / 1000;
+    if (currentSecond > lastPrintedSecond) {
+      lastPrintedSecond = currentSecond;
       Serial.print("Button held for: ");
-      Serial.print(lastPrintedTime);
+      Serial.print(currentSecond);
       Serial.println(" seconds");
     }
 
@@ -170,45 +231,37 @@ void loop() {
       digitalWrite(LED_PIN, HIGH); // Turn on the LED for all other seconds
     }
 
-    // If the button is held for 5 seconds and service mode is already activated, deactivate it
-    if (elapsedTime >= 5000 && elapsedTime < 6000 && serviceMode) {
-      Serial.println("Button held for 5 seconds. Deactivating service mode...");
-      serviceMode = false; // Deactivate service mode
-      serviceModeActivated = false; // Reset the activation flag
-      serviceModeDeactivated = true; // Mark service mode as deactivated
-    }
-
-    // If the button is held for 10 seconds, reset Wi-Fi settings
-    if (elapsedTime >= 10000) { // 10 seconds
-      Serial.println("Button held for 10 seconds. Resetting Wi-Fi settings...");
-      WiFiManager wifiManager;
-      wifiManager.resetSettings(); // Clear saved Wi-Fi credentials
-      delay(1000); // Small delay to ensure resetSettings completes
-      Serial.println("Restarting ESP...");
-      serviceMode = false; // Exit service mode
-      ESP.restart(); // Restart the ESP32
-    }
-
     return; // Skip the rest of the loop while the button is held
   } else { // Button is not pressed
     if (buttonPressed) { // Button was just released
-      unsigned long elapsedTime = millis() - buttonPressStart;
+      buttonPressed = false; // Reset button state
+      digitalWrite(LED_PIN, LOW); // Turn off the LED when the button is released
 
-      // Check if the button was released at exactly 5 seconds
-      if (elapsedTime >= 5000 && elapsedTime < 6000 && !serviceModeActivated && !serviceModeDeactivated) {
-        Serial.println("Button released at 5 seconds. Activating service mode...");
-        serviceMode = true; // Mark service mode as activated
-        serviceModeActivated = true; // Ensure this message is printed only once
+      // Check if the button was released after exactly 5 seconds
+      if (elapsedTime >= 5000 && elapsedTime < 6000) {
+        if (serviceMode) {
+          Serial.println("Button released after 5 seconds. Deactivating service mode...");
+          serviceMode = false; // Deactivate service mode
+        } else {
+          Serial.println("Button released after 5 seconds. Activating service mode...");
+          serviceMode = true; // Activate service mode
+        }
+      } else if (elapsedTime >= 10000) { // If the button was held for 10 seconds
+        Serial.println("Button released after 10 seconds. Resetting Wi-Fi settings...");
+        WiFiManager wifiManager;
+        wifiManager.resetSettings(); // Clear saved Wi-Fi credentials
+        delay(1000); // Small delay to ensure resetSettings completes
+        Serial.println("Restarting ESP...");
+        serviceMode = false; // Exit service mode
+        ESP.restart(); // Restart the ESP32
       }
 
-      buttonPressed = false; // Reset button state
       Serial.println("Button released. Timer reset.");
     }
-    digitalWrite(LED_PIN, LOW); // Turn off the LED when the button is released
   }
 
-  // If not in service mode, continue normal operation
-  if (!serviceMode) {
+  // // If not in service mode, continue normal operation
+  // if (!serviceMode) {
     // Request temperature readings from the sensor
     sensors.requestTemperatures();
     float temperatureC = sensors.getTempCByIndex(0);
@@ -236,4 +289,3 @@ void loop() {
     // Delay for 2 seconds before the next reading
     delay(2000);
   }
-}

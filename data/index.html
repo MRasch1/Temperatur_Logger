@@ -6,6 +6,8 @@
   <title>Temperature Logger</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Include Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
   <header>
@@ -15,27 +17,84 @@
     Current Temperature: <span id="temperature">--</span> °C
   </div>
   <canvas id="chart"></canvas>
-  <div class="service-mode" id="service-mode" style="display: none;">
-    <h2>Service Mode</h2>
-    <button onclick="clearWiFiConfig()">Clear Wi-Fi Configuration</button>
-    <button onclick="clearTemperatureData()">Clear Temperature Data</button>
+  <div class="container mt-5">
+    <!-- Service Mode Actions -->
+    <div id="serviceModeActions" style="display: none;">
+      <p>Service Mode Options:</p>
+      <button onclick="clearWiFiConfig()" class="btn btn-danger">Clear Wi-Fi Config</button>
+      <button onclick="clearTemperatureData()" class="btn btn-danger">Clear Temperature Data</button>
+      <hr>
+    </div>
+
+    <!-- Collapsible Menu -->
+    <div class="accordion" id="menuAccordion">
+      <!-- Download CSV Section -->
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="headingDownload">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseDownload" aria-expanded="false" aria-controls="collapseDownload">
+            Download CSV
+          </button>
+        </h2>
+        <div id="collapseDownload" class="accordion-collapse collapse" aria-labelledby="headingDownload" data-bs-parent="#menuAccordion">
+          <div class="accordion-body">
+            <p>Click the button below to download the temperature logs as a CSV file:</p>
+            <a href="/download_logs" class="btn btn-primary">Download CSV</a>
+          </div>
+        </div>
+      </div>
+      <!-- Service Mode Section -->
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="headingServiceMode">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseServiceMode" aria-expanded="false" aria-controls="collapseServiceMode">
+            Service Mode
+          </button>
+        </h2>
+        <div id="collapseServiceMode" class="accordion-collapse collapse" aria-labelledby="headingServiceMode" data-bs-parent="#menuAccordion">
+          <div class="accordion-body">
+            <p>Click the button below to toggle service mode:</p>
+            <button id="toggleServiceModeButton" onclick="toggleServiceMode()" class="btn btn-warning">Activate Service Mode</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
   <footer>
     <p>Powered by ESP32</p>
   </footer>
   <script src="script.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     // Check if the ESP32 is in service mode
     fetch('/is_service_mode')
       .then(response => response.json())
       .then(data => {
+        console.log('Service Mode Status:', data); // Debug the response
+        const serviceModeActions = document.getElementById('serviceModeActions');
+        const toggleServiceModeButton = document.getElementById('toggleServiceModeButton');
+        const collapseServiceMode = document.getElementById('collapseServiceMode');
+
         if (data.serviceMode) {
-          document.getElementById('service-mode').style.display = 'block'; // Show buttons
+          // Show the service mode actions and update the button text
+          serviceModeActions.style.display = 'block';
+          toggleServiceModeButton.textContent = 'Deactivate Service Mode';
+          collapseServiceMode.classList.remove('show'); // Ensure the collapsible menu is closed
         } else {
-          document.getElementById('service-mode').style.display = 'none'; // Hide buttons
+          // Hide the service mode actions and update the button text
+          serviceModeActions.style.display = 'none';
+          toggleServiceModeButton.textContent = 'Activate Service Mode';
         }
       })
-      .catch(error => console.error('Error:', error));
+      .catch(error => console.error('Error fetching service mode status:', error));
+
+    function toggleServiceMode() {
+      fetch('/toggle_service_mode')
+        .then(response => response.text())
+        .then(data => {
+          alert(data);
+          location.reload(); // Reload the page to update the service mode status
+        })
+        .catch(error => console.error('Error:', error));
+    }
 
     function clearWiFiConfig() {
       if (confirm("Are you sure you want to clear Wi-Fi configuration?")) {
