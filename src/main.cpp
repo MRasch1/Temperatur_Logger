@@ -82,7 +82,7 @@ void logTemperatureToSPIFFS(float temperature)
   }
 
   // Create a log entry with the current time and temperature
-  String logEntry = getFormattedTime() + " - " + String(temperature) + " °C\n";
+  String logEntry = getFormattedTime() + " - " + String(temperature) + " °C \n";
   file.print(logEntry); // Write the log entry to the file
   file.close();         // Close the file
 }
@@ -402,9 +402,6 @@ void loop()
     Serial.print("Temperature: ");
     Serial.print(temperatureC);
     Serial.println(" °C");
-
-    // Log temperature to SPIFFS
-    logTemperatureToSPIFFS(temperatureC);
 
     // Send temperature updates to WebSocket clients every 5 minutes
     static unsigned long lastTemperatureUpdate = 0;
