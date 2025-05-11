@@ -1,51 +1,60 @@
-#include <OneWire.h>
-#include <DallasTemperature.h>
-#include <WiFiManager.h> // Include WiFiManager library
-#include <ESPAsyncWebServer.h>
-#include <AsyncTCP.h>
-#include <FS.h>
-#include <SPIFFS.h>
-#include "memory_logger.h"
-#include <time.h> // For NTP time synchronization
+#include <OneWire.h>               // Library for OneWire communication (used by DS18B20 temperature sensor)
+#include <DallasTemperature.h>     // Library for DS18B20 temperature sensor
+#include <WiFiManager.h>           // Library for managing Wi-Fi connections
+#include <ESPAsyncWebServer.h>     // Library for asynchronous web server
+#include <AsyncTCP.h>              // Library for asynchronous TCP communication
+#include <FS.h>                    // File system library
+#include <SPIFFS.h>                // SPI Flash File System library
+#include "memory_logger.h"         // Custom memory logger (assumed to be user-defined)
+#include <time.h>                  // Library for time synchronization using NTP
 
-#define ONE_WIRE_BUS 4      // GPIO pin connected to the DS18B20 data pin
-#define RESET_BUTTON_PIN 35 // GPIO pin connected to the reset button (D35)
-#define LED_PIN 18          // GPIO pin connected to the LED (D18)
+// Pin definitions
+#define ONE_WIRE_BUS 4             // GPIO pin connected to the DS18B20 data pin
+#define RESET_BUTTON_PIN 35        // GPIO pin connected to the reset button
+#define LED_PIN 18                 // GPIO pin connected to the LED
 
-bool serviceMode = false; // Flag to track service mode
+// Global variables
+bool serviceMode = false;          // Flag to track whether the device is in service mode
 
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws"); // WebSocket endpoint
+// OneWire and temperature sensor setup
+OneWire oneWire(ONE_WIRE_BUS);     // Initialize OneWire communication
+DallasTemperature sensors(&oneWire); // Initialize DallasTemperature library with OneWire instance
 
+// Web server and WebSocket setup
+AsyncWebServer server(80);         // Create an asynchronous web server on port 80
+AsyncWebSocket ws("/ws");          // WebSocket endpoint for real-time communication with clients
+
+// Function to get the current time as a formatted string
 String getFormattedTime()
 {
-  time_t now = time(nullptr);
+  time_t now = time(nullptr);      // Get the current time
   struct tm timeinfo;
-  localtime_r(&now, &timeinfo);
+  localtime_r(&now, &timeinfo);    // Convert time to local time structure
 
   char buffer[64];
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo); // Format: YYYY-MM-DD HH:MM:SS
-  return String(buffer);
+  return String(buffer);           // Return the formatted time as a string
 }
 
+// Function to send temperature updates to all connected WebSocket clients
 void notifyClients(float temperature)
 {
-  String message = String(temperature);
-  ws.textAll(message); // Send temperature to all connected clients
+  String message = String(temperature); // Convert temperature to a string
+  ws.textAll(message);                  // Send the temperature to all connected WebSocket clients
 }
 
+// Function to handle incoming WebSocket messages
 void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
 {
   AwsFrameInfo *info = (AwsFrameInfo *)arg;
   if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
   {
-    data[len] = 0;
+    data[len] = 0; // Null-terminate the received data
     Serial.printf("WebSocket message received: %s\n", (char *)data);
   }
 }
 
+// Function to handle WebSocket events (e.g., connect, disconnect, data received)
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
 {
   if (type == WS_EVT_CONNECT)
@@ -62,51 +71,54 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   }
 }
 
-void logTemperatureToSPIFFS(float temperature) {
-  File file = SPIFFS.open("/temperature_log.txt", FILE_APPEND);
-  if (!file) {
+// Function to log temperature data to SPIFFS
+void logTemperatureToSPIFFS(float temperature)
+{
+  File file = SPIFFS.open("/temperature_log.txt", FILE_APPEND); // Open the log file in append mode
+  if (!file)
+  {
     Serial.println("Failed to open log file for writing.");
     return;
   }
 
-  String logEntry = getFormattedTime() + " - " + String(temperature) + " °C\n"; // Ensure newline at the end
-  file.print(logEntry);
-  file.close();
-
-  // Serial.println("Logged: " + logEntry);
+  // Create a log entry with the current time and temperature
+  String logEntry = getFormattedTime() + " - " + String(temperature) + " °C\n";
+  file.print(logEntry); // Write the log entry to the file
+  file.close();         // Close the file
 }
 
 // Function to generate a CSV file from log data
 bool generateCSV(const char *filePath, const char *header, const String &data)
 {
-  File csvFile = SPIFFS.open(filePath, FILE_WRITE);
+  File csvFile = SPIFFS.open(filePath, FILE_WRITE); // Open the CSV file for writing
   if (!csvFile)
   {
     Serial.println("Failed to open CSV file for writing.");
     return false;
   }
 
-  csvFile.println(header); // Write the header
+  csvFile.println(header); // Write the header row to the CSV file
 
-  // Add spaces between logs by appending an extra newline after each log entry
+  // Format the log data by adding extra newlines between entries
   String formattedData = data;
-  formattedData.replace("\n", "\n\n"); // Replace single newlines with double newlines
+  formattedData.replace("\n", "\n\n");
 
-  csvFile.print(formattedData); // Write the formatted log data
-  csvFile.close();
-  // Serial.println("CSV file generated successfully.");
+  csvFile.print(formattedData); // Write the formatted log data to the CSV file
+  csvFile.close();              // Close the file
   return true;
 }
 
+// Function to generate a CSV file from the temperature log
 void generateCSVFromLogs()
 {
-  File logFile = SPIFFS.open("/temperature_log.txt", FILE_READ);
+  File logFile = SPIFFS.open("/temperature_log.txt", FILE_READ); // Open the log file for reading
   if (!logFile)
   {
     Serial.println("Failed to open log file for generating CSV.");
     return;
   }
 
+  // Read the log file contents into a string
   String logs = "";
   while (logFile.available())
   {
@@ -114,11 +126,8 @@ void generateCSVFromLogs()
   }
   logFile.close();
 
-  if (generateCSV("/temperature_log.csv", "Timestamp,Temperature", logs))
-  {
-    // Serial.println("CSV generated successfully.");
-  }
-  else
+  // Generate the CSV file from the log data
+  if (!generateCSV("/temperature_log.csv", "Timestamp,Temperature", logs))
   {
     Serial.println("Failed to generate CSV.");
   }
@@ -126,56 +135,57 @@ void generateCSVFromLogs()
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(115200); // Start serial communication for debugging
 
-  // Configure the reset button pin
+  // Configure the reset button pin as an input with an internal pull-up resistor
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
-  // Configure the LED pin
+  // Configure the LED pin as an output and ensure it is off initially
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW); // Ensure the LED is off initially
+  digitalWrite(LED_PIN, LOW);
 
-  // Initialize SPIFFS
+  // Initialize SPIFFS (file system for storing logs and other files)
   if (!SPIFFS.begin())
   {
     Serial.println("An error occurred while mounting SPIFFS");
-    return;
+    return; // Exit setup if SPIFFS initialization fails
   }
 
-  // WiFiManager setup
+  // Set up Wi-Fi using WiFiManager
   WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(180); // Timeout for configuration portal (in seconds)
   if (!wifiManager.autoConnect("ESP32-Setup", "password"))
   {
     Serial.println("Failed to connect to Wi-Fi and timed out!");
-    ESP.restart(); // Restart if connection fails
+    ESP.restart(); // Restart the ESP32 if Wi-Fi connection fails
   }
 
   Serial.println("Wi-Fi connected!");
   Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println(WiFi.localIP()); // Print the assigned IP address
 
+  // Synchronize time using NTP servers
   configTime(3600, 3600, "pool.ntp.org", "time.nist.gov"); // Set timezone to Copenhagen (CET/CEST)
   Serial.print("Waiting for NTP time sync...");
   unsigned long startTime = millis();
-  while (!time(nullptr))
+  while (!time(nullptr)) // Wait until time is synchronized
   {
     Serial.print(".");
     delay(1000);
-    if (millis() - startTime > 30000)
-    { // Timeout after 30 seconds
+    if (millis() - startTime > 30000) // Timeout after 30 seconds
+    {
       Serial.println("\nFailed to synchronize time.");
       break;
     }
   }
   Serial.println("\nTime synchronized!");
 
-  // Initialize temperature sensor
+  // Initialize the DS18B20 temperature sensor
   sensors.begin();
   int deviceCount = 0;
   oneWire.reset_search();
   byte address[8];
-  while (oneWire.search(address))
+  while (oneWire.search(address)) // Search for devices on the OneWire bus
   {
     deviceCount++;
   }
@@ -190,14 +200,14 @@ void setup()
     Serial.println("DS18B20 Temperature Sensor Initialized");
   }
 
-  // WebSocket setup
+  // Set up WebSocket events
   ws.onEvent(onEvent);
   server.addHandler(&ws);
 
-  // Serve static files from SPIFFS
+  // Serve static files from SPIFFS (e.g., HTML, CSS, JavaScript)
   server.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
 
-  // Add endpoints
+  // Add endpoints for various functionalities
   server.on("/clear_wifi", HTTP_GET, [](AsyncWebServerRequest *request)
             {
     WiFiManager wifiManager;
@@ -302,9 +312,9 @@ void setup()
 void loop()
 {
   static bool buttonPressed = false;          // Flag to track button state
-  static unsigned long buttonPressStart = 0;  // Track when the button was first pressed
-  static unsigned long elapsedTime = 0;       // Track how long the button has been held
-  static unsigned long lastPrintedSecond = 0; // Track the last second that was printed
+  static unsigned long buttonPressStart = 0;  // Time when the button was first pressed
+  static unsigned long elapsedTime = 0;       // Duration the button has been held
+  static unsigned long lastPrintedSecond = 0; // Last second that was printed
 
   // Check if the reset button is pressed
   if (digitalRead(RESET_BUTTON_PIN) == LOW)
@@ -378,8 +388,6 @@ void loop()
     }
   }
 
-  // // If not in service mode, continue normal operation
-  // if (!serviceMode) {
   // Request temperature readings from the sensor
   sensors.requestTemperatures();
   float temperatureC = sensors.getTempCByIndex(0);
@@ -396,17 +404,16 @@ void loop()
     Serial.println(" °C");
 
     // Log temperature to SPIFFS
-    // logTemperatureToSPIFFS(temperatureC);
+    logTemperatureToSPIFFS(temperatureC);
 
     // Send temperature updates to WebSocket clients every 5 minutes
     static unsigned long lastTemperatureUpdate = 0;
-    if (millis() - lastTemperatureUpdate > 5000)
+    if (millis() - lastTemperatureUpdate > 300000)
     {
-      notifyClients(temperatureC);
+      notifyClients(temperatureC);          // Notify WebSocket clients
       logTemperatureToSPIFFS(temperatureC); // Log temperature to SPIFFS
-      lastTemperatureUpdate = millis();
-      // Generate CSV from logs
-      generateCSVFromLogs();
+      lastTemperatureUpdate = millis();     // Update the last temperature update time
+      generateCSVFromLogs();                // Generate CSV from logs
     }
   }
 
