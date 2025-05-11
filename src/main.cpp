@@ -6,6 +6,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include "memory_logger.h"
+#include <time.h> // For NTP time synchronization
 
 #define ONE_WIRE_BUS 4      // GPIO pin connected to the DS18B20 data pin
 #define RESET_BUTTON_PIN 35 // GPIO pin connected to the reset button (D35)
@@ -17,6 +18,17 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws"); // WebSocket endpoint
+
+String getFormattedTime()
+{
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  char buffer[64];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo); // Format: YYYY-MM-DD HH:MM:SS
+  return String(buffer);
+}
 
 void notifyClients(float temperature)
 {
@@ -50,20 +62,17 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   }
 }
 
-void logTemperatureToSPIFFS(float temperature)
-{
+void logTemperatureToSPIFFS(float temperature) {
   File file = SPIFFS.open("/temperature_log.txt", FILE_APPEND);
-  if (!file)
-  {
+  if (!file) {
     Serial.println("Failed to open log file for writing.");
     return;
   }
 
-  String logEntry = String(millis() / 1000) + "s: " + String(temperature) + " °C\n";
+  String logEntry = getFormattedTime() + " - " + String(temperature) + " °C\n"; // Ensure newline at the end
   file.print(logEntry);
   file.close();
 
-  // Remove or comment out this line to stop printing "Logged" messages
   // Serial.println("Logged: " + logEntry);
 }
 
@@ -78,10 +87,41 @@ bool generateCSV(const char *filePath, const char *header, const String &data)
   }
 
   csvFile.println(header); // Write the header
-  csvFile.print(data);     // Write the log data
+
+  // Add spaces between logs by appending an extra newline after each log entry
+  String formattedData = data;
+  formattedData.replace("\n", "\n\n"); // Replace single newlines with double newlines
+
+  csvFile.print(formattedData); // Write the formatted log data
   csvFile.close();
   // Serial.println("CSV file generated successfully.");
   return true;
+}
+
+void generateCSVFromLogs()
+{
+  File logFile = SPIFFS.open("/temperature_log.txt", FILE_READ);
+  if (!logFile)
+  {
+    Serial.println("Failed to open log file for generating CSV.");
+    return;
+  }
+
+  String logs = "";
+  while (logFile.available())
+  {
+    logs += logFile.readStringUntil('\n');
+  }
+  logFile.close();
+
+  if (generateCSV("/temperature_log.csv", "Timestamp,Temperature", logs))
+  {
+    // Serial.println("CSV generated successfully.");
+  }
+  else
+  {
+    Serial.println("Failed to generate CSV.");
+  }
 }
 
 void setup()
@@ -114,6 +154,21 @@ void setup()
   Serial.println("Wi-Fi connected!");
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
+
+  configTime(3600, 3600, "pool.ntp.org", "time.nist.gov"); // Set timezone to Copenhagen (CET/CEST)
+  Serial.print("Waiting for NTP time sync...");
+  unsigned long startTime = millis();
+  while (!time(nullptr))
+  {
+    Serial.print(".");
+    delay(1000);
+    if (millis() - startTime > 30000)
+    { // Timeout after 30 seconds
+      Serial.println("\nFailed to synchronize time.");
+      break;
+    }
+  }
+  Serial.println("\nTime synchronized!");
 
   // Initialize temperature sensor
   sensors.begin();
@@ -154,15 +209,41 @@ void setup()
     ESP.restart(); });
 
   // Endpoint to clear temperature data
-  server.on("/clear_data", HTTP_GET, [](AsyncWebServerRequest *request)
-            {
+  server.on("/clear_data", HTTP_GET, [](AsyncWebServerRequest *request) {
+    bool csvCleared = false;
+    bool txtCleared = false;
+
+    // Clear the CSV file
+    if (SPIFFS.exists("/temperature_log.csv")) {
+      if (SPIFFS.remove("/temperature_log.csv")) {
+        Serial.println("CSV file cleared successfully.");
+        csvCleared = true;
+      } else {
+        Serial.println("Failed to clear CSV file.");
+      }
+    } else {
+      Serial.println("CSV file does not exist.");
+    }
+
+    // Clear the TXT log file
     if (SPIFFS.exists("/temperature_log.txt")) {
-      SPIFFS.remove("/temperature_log.txt");
-      Serial.println("Temperature data cleared.");
-      request->send(200, "text/plain", "Temperature data cleared.");
+      if (SPIFFS.remove("/temperature_log.txt")) {
+        Serial.println("TXT log file cleared successfully.");
+        txtCleared = true;
+      } else {
+        Serial.println("Failed to clear TXT log file.");
+      }
+    } else {
+      Serial.println("TXT log file does not exist.");
+    }
+
+    // Respond to the client
+    if (csvCleared || txtCleared) {
+      request->send(200, "text/plain", "Temperature data cleared successfully.");
     } else {
       request->send(404, "text/plain", "No temperature data to clear.");
-    } });
+    }
+  });
 
   // Endpoint to check service mode status
   server.on("/is_service_mode", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -325,29 +406,7 @@ void loop()
       logTemperatureToSPIFFS(temperatureC); // Log temperature to SPIFFS
       lastTemperatureUpdate = millis();
       // Generate CSV from logs
-      File logFile = SPIFFS.open("/temperature_log.txt", FILE_READ);
-      if (!logFile)
-      {
-        Serial.println("Failed to open log file for generating CSV.");
-      }
-      else
-      {
-        String logs = " ";
-        while (logFile.available())
-        {
-          logs += logFile.readStringUntil('\n');
-        }
-        logFile.close();
-
-        if (generateCSV("/temperature_log.csv", "Timestamp,Temperature", logs))
-        {
-          // Serial.println("CSV generated successfully.");
-        }
-        else
-        {
-          Serial.println("Failed to generate CSV.");
-        }
-      }
+      generateCSVFromLogs();
     }
   }
 
