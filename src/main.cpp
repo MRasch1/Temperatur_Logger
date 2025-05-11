@@ -5,7 +5,7 @@
 #include <AsyncTCP.h>              // Library for asynchronous TCP communication
 #include <FS.h>                    // File system library
 #include <SPIFFS.h>                // SPI Flash File System library
-#include "memory_logger.h"         // Custom memory logger (assumed to be user-defined)
+#include "memory_logger.h"         // Custom memory logger library
 #include <time.h>                  // Library for time synchronization using NTP
 
 // Pin definitions
